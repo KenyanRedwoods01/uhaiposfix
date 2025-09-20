@@ -86,96 +86,99 @@ class SaleController extends Controller
     public function index(Request $request)
 {
     $role = Role::find(Auth::user()->role_id);
-    if($role->hasPermissionTo('sales-index')) {
-        // Get the logged-in user's pos_accnt_id for multi-tenancy filtering
+    if ($role->hasPermissionTo('sales-index')) {
+        // 🔒 Tenant scoping
         $user_pos_accnt_id = Auth::user()->pos_accnt_id;
-        
+
+        // Permissions
         $permissions = Role::findByName($role->name)->permissions;
+        $all_permission = [];
         foreach ($permissions as $permission)
             $all_permission[] = $permission->name;
-        if(empty($all_permission))
+        if (empty($all_permission))
             $all_permission[] = 'dummy text';
-        
-        // Request parameters handling
-        if($request->input('warehouse_id'))
-            $warehouse_id = $request->input('warehouse_id');
-        else
-            $warehouse_id = 0;
-        if($request->input('sale_status'))
-            $sale_status = $request->input('sale_status');
-        else
-            $sale_status = 0;
-        if($request->input('payment_status'))
-            $payment_status = $request->input('payment_status');
-        else
-            $payment_status = 0;
-        if($request->input('sale_type'))
-            $sale_type = $request->input('sale_type');
-        else
-            $sale_type = 0;
-        if($request->input('payment_method'))
-            $payment_method = $request->input('payment_method');
-        else
-            $payment_method = 0;
-        if($request->input('starting_date')) {
+
+        // Filters
+        $warehouse_id = $request->input('warehouse_id', 0);
+        $sale_status = $request->input('sale_status', 0);
+        $payment_status = $request->input('payment_status', 0);
+        $sale_type = $request->input('sale_type', 0);
+        $payment_method = $request->input('payment_method', 0);
+        if ($request->input('starting_date')) {
             $starting_date = $request->input('starting_date');
             $ending_date = $request->input('ending_date');
-        }
-        else {
-            $starting_date = date("Y-m-d", strtotime(date('Y-m-d', strtotime('-1 year', strtotime(date('Y-m-d') )))));
+        } else {
+            $starting_date = date("Y-m-d", strtotime("-1 year"));
             $ending_date = date("Y-m-d");
         }
-        
-        // Apply multi-tenancy filtering to all data collections
+
+        // Tenant-scoped supporting data
         $lims_gift_card_list = GiftCard::where([
             ["is_active", true],
             ["pos_accnt_id", $user_pos_accnt_id]
         ])->get();
-        
+
         $lims_pos_setting_data = PosSetting::where('pos_accnt_id', $user_pos_accnt_id)->latest()->first();
         $lims_reward_point_setting_data = RewardPointSetting::where('pos_accnt_id', $user_pos_accnt_id)->latest()->first();
-        
+
         $lims_warehouse_list = Warehouse::where([
             ['is_active', true],
             ['pos_accnt_id', $user_pos_accnt_id]
         ])->get();
-        
+
         $lims_account_list = Account::where([
             ['is_active', true],
             ['pos_accnt_id', $user_pos_accnt_id]
         ])->get();
-        
+
         $lims_courier_list = Courier::where([
             ['is_active', true],
             ['pos_accnt_id', $user_pos_accnt_id]
         ])->get();
-        
-        if($lims_pos_setting_data)
-            $options = explode(',', $lims_pos_setting_data->payment_options);
-        else
-            $options = [];
-        
-        // Filter sales count by pos_accnt_id as well
+
+        $options = $lims_pos_setting_data ? explode(',', $lims_pos_setting_data->payment_options) : [];
+
+        // Tenant-scoped sales count
         $numberOfInvoice = Sale::where('pos_accnt_id', $user_pos_accnt_id)->count();
-        
+
+        // Custom fields
         $custom_fields = CustomField::where([
-                            ['belongs_to', 'sale'],
-                            ['is_table', true],
-                            ['pos_accnt_id', $user_pos_accnt_id]
-                        ])->pluck('name');
-        
+            ['belongs_to', 'sale'],
+            ['is_table', true],
+            ['pos_accnt_id', $user_pos_accnt_id]
+        ])->pluck('name');
+
         $field_name = [];
-        foreach($custom_fields as $fieldName) {
+        foreach ($custom_fields as $fieldName) {
             $field_name[] = str_replace(" ", "_", strtolower($fieldName));
         }
-        
+
         $smsTemplates = SmsTemplate::where('pos_accnt_id', $user_pos_accnt_id)->get();
-        
-        return view('backend.sale.index', compact('starting_date', 'ending_date', 'warehouse_id', 'sale_status', 'payment_status', 'sale_type', 'payment_method', 'lims_gift_card_list', 'lims_pos_setting_data', 'lims_reward_point_setting_data', 'lims_account_list', 'lims_warehouse_list', 'all_permission','options', 'numberOfInvoice', 'custom_fields', 'field_name', 'lims_courier_list','smsTemplates'));
-    }
-    else
+
+        // 🔧 Tenant-scoped sales list (if the view expects it)
+        $lims_sale_list = Sale::where('pos_accnt_id', $user_pos_accnt_id)
+            ->when($warehouse_id, fn($q) => $q->where('warehouse_id', $warehouse_id))
+            ->when($sale_status, fn($q) => $q->where('sale_status', $sale_status))
+            ->when($payment_status, fn($q) => $q->where('payment_status', $payment_status))
+            ->when($sale_type, fn($q) => $q->where('sale_type', $sale_type))
+            ->when($payment_method, fn($q) => $q->where('payment_method', $payment_method))
+            ->whereBetween('created_at', [$starting_date, $ending_date])
+            ->get();
+
+        return view('backend.sale.index', compact(
+            'starting_date', 'ending_date', 'warehouse_id', 'sale_status',
+            'payment_status', 'sale_type', 'payment_method',
+            'lims_gift_card_list', 'lims_pos_setting_data',
+            'lims_reward_point_setting_data', 'lims_account_list',
+            'lims_warehouse_list', 'all_permission', 'options',
+            'numberOfInvoice', 'custom_fields', 'field_name',
+            'lims_courier_list', 'smsTemplates', 'lims_sale_list'
+        ));
+    } else {
         return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+    }
 }
+
 
     public function saleData(Request $request)
     {
