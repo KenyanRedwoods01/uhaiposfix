@@ -1419,78 +1419,129 @@ $totalData = DB::table('products')->where('is_active', true)
     }
 
     public function getData($id, $variant_id)
-    {
-        if($variant_id) {
-            $data = Product::join('product_variants', 'products.id', 'product_variants.product_id')
-                ->select('products.name', 'product_variants.item_code')
-                ->where([
-                    ['products.id', $id],
-                    ['product_variants.variant_id', $variant_id]
-                ])->first();
-            $data->code = $data->item_code;
-        }
-        else
-            // NOTE (Dev): Restricted product data fetch to the current POS account.
-            $data = Product::select('name', 'code')
-                ->where('id', $id)
+{
+    if($variant_id) {
+        // 🔧 Added tenant filter here for variant queries too
+        // Before: could pull product + variant from another tenant
+        $data = Product::join('product_variants', 'products.id', 'product_variants.product_id')
+            ->select('products.name', 'product_variants.item_code')
+            ->where([
+                ['products.id', $id],
+                ['product_variants.variant_id', $variant_id],
+                ['products.pos_accnt_id', Auth::user()->pos_accnt_id] // tenant isolation
+            ])->first();
+
+        $data->code = $data->item_code;
+    }
+    else {
+        // 🔧 Already tenant-restricted, left intact
+        $data = Product::select('name', 'code')
+            ->where('id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->first();
+    }
+
+    return $data;
+}
+
+
+    public function productWarehouseData($id)
+{
+    $warehouse = [];
+    $qty = [];
+    $batch = [];
+    $expired_date = [];
+    $imei_number = [];
+    $warehouse_name = [];
+    $variant_name = [];
+    $variant_qty = [];
+    $product_warehouse = [];
+    $product_variant_warehouse = [];
+
+    // 🔧 Added tenant filter to make sure product belongs to this POS account
+    $lims_product_data = Product::select('id', 'is_variant')
+        ->where('id', $id)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant isolation
+        ->firstOrFail();
+
+    if ($lims_product_data->is_variant) {
+        // 🔧 Restrict product_warehouse data to tenant
+        $lims_product_variant_warehouse_data = Product_Warehouse::where('product_id', $lims_product_data->id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant filter
+            ->orderBy('warehouse_id')
+            ->get();
+
+        $lims_product_warehouse_data = Product_Warehouse::select('warehouse_id', DB::raw('sum(qty) as qty'))
+            ->where('product_id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant filter
+            ->groupBy('warehouse_id')
+            ->get();
+
+        foreach ($lims_product_variant_warehouse_data as $key => $product_variant_warehouse_data) {
+            // 🔧 Ensure warehouse + variant also respect tenant scoping
+            $lims_warehouse_data = Warehouse::where('id', $product_variant_warehouse_data->warehouse_id)
                 ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
                 ->first();
 
-        return $data;
+            $lims_variant_data = Variant::where('id', $product_variant_warehouse_data->variant_id)
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+                ->first();
+
+            $warehouse_name[] = $lims_warehouse_data?->name ?? 'N/A';
+            $variant_name[] = $lims_variant_data?->name ?? 'N/A';
+            $variant_qty[] = $product_variant_warehouse_data->qty;
+        }
+    }
+    else {
+        // 🔧 Restrict product_warehouse data to tenant
+        $lims_product_warehouse_data = Product_Warehouse::where('product_id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->orderBy('warehouse_id', 'asc')
+            ->get();
     }
 
-    public function productWarehouseData($id)
-    {
-        $warehouse = [];
-        $qty = [];
-        $batch = [];
-        $expired_date = [];
-        $imei_number = [];
-        $warehouse_name = [];
-        $variant_name = [];
-        $variant_qty = [];
-        $product_warehouse = [];
-        $product_variant_warehouse = [];
-        $lims_product_data = Product::select('id', 'is_variant')->find($id);
-        if($lims_product_data->is_variant) {
-            $lims_product_variant_warehouse_data = Product_Warehouse::where('product_id', $lims_product_data->id)->orderBy('warehouse_id')->get();
-            $lims_product_warehouse_data = Product_Warehouse::select('warehouse_id', DB::raw('sum(qty) as qty'))->where('product_id', $id)->groupBy('warehouse_id')->get();
-            foreach ($lims_product_variant_warehouse_data as $key => $product_variant_warehouse_data) {
-                $lims_warehouse_data = Warehouse::find($product_variant_warehouse_data->warehouse_id);
-                $lims_variant_data = Variant::find($product_variant_warehouse_data->variant_id);
-                $warehouse_name[] = $lims_warehouse_data->name;
-                $variant_name[] = $lims_variant_data->name;
-                $variant_qty[] = $product_variant_warehouse_data->qty;
-            }
-        }
-        else {
-            $lims_product_warehouse_data = Product_Warehouse::where('product_id', $id)->orderBy('warehouse_id', 'asc')->get();
-        }
-        foreach ($lims_product_warehouse_data as $key => $product_warehouse_data) {
-            $lims_warehouse_data = Warehouse::find($product_warehouse_data->warehouse_id);
-            if($product_warehouse_data->product_batch_id) {
-                $product_batch_data = ProductBatch::select('batch_no', 'expired_date')->find($product_warehouse_data->product_batch_id);
-                $batch_no = $product_batch_data->batch_no;
-                $expiredDate = date(config('date_format'), strtotime($product_batch_data->expired_date));
-            }
-            else {
-                $batch_no = 'N/A';
-                $expiredDate = 'N/A';
-            }
-            $warehouse[] = $lims_warehouse_data->name;
-            $batch[] = $batch_no;
-            $expired_date[] = $expiredDate;
-            $qty[] = $product_warehouse_data->qty;
-            if($product_warehouse_data->imei_number && !str_contains($product_warehouse_data->imei_number, 'null'))
-                $imei_number[] = $product_warehouse_data->imei_number;
-            else
-                $imei_number[] = 'N/A';
+    foreach ($lims_product_warehouse_data as $key => $product_warehouse_data) {
+        // 🔧 Tenant filter on warehouse
+        $lims_warehouse_data = Warehouse::where('id', $product_warehouse_data->warehouse_id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->first();
+
+        if ($product_warehouse_data->product_batch_id) {
+            // 🔧 Tenant filter on product batch
+            $product_batch_data = ProductBatch::where('id', $product_warehouse_data->product_batch_id)
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+                ->select('batch_no', 'expired_date')
+                ->first();
+
+            $batch_no = $product_batch_data?->batch_no ?? 'N/A';
+            $expiredDate = $product_batch_data && $product_batch_data->expired_date
+                ? date(config('date_format'), strtotime($product_batch_data->expired_date))
+                : 'N/A';
+        } else {
+            $batch_no = 'N/A';
+            $expiredDate = 'N/A';
         }
 
-        $product_warehouse = [$warehouse, $qty, $batch, $expired_date, $imei_number];
-        $product_variant_warehouse = [$warehouse_name, $variant_name, $variant_qty];
-        return ['product_warehouse' => $product_warehouse, 'product_variant_warehouse' => $product_variant_warehouse];
+        $warehouse[] = $lims_warehouse_data?->name ?? 'N/A';
+        $batch[] = $batch_no;
+        $expired_date[] = $expiredDate;
+        $qty[] = $product_warehouse_data->qty;
+
+        if ($product_warehouse_data->imei_number && !str_contains($product_warehouse_data->imei_number, 'null')) {
+            $imei_number[] = $product_warehouse_data->imei_number;
+        } else {
+            $imei_number[] = 'N/A';
+        }
     }
+
+    $product_warehouse = [$warehouse, $qty, $batch, $expired_date, $imei_number];
+    $product_variant_warehouse = [$warehouse_name, $variant_name, $variant_qty];
+
+    return [
+        'product_warehouse' => $product_warehouse,
+        'product_variant_warehouse' => $product_variant_warehouse
+    ];
+}
 
     public function printBarcode(Request $request)
     {
@@ -1534,55 +1585,62 @@ $totalData = DB::table('products')->where('is_active', true)
     }
 
     public function limsProductSearch(Request $request)
-    {
-        $product_code = explode("(", $request['data']);
-        $product_code[0] = rtrim($product_code[0], " ");
-        // NOTE (Dev): Restricted search to current POS account only.
-        $lims_product_list = Product::where('code', $product_code[0])
-            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+{
+    $product_code = explode("(", $request['data']);
+    $product_code[0] = rtrim($product_code[0], " ");
+
+    // 🔧 Restricted search to current POS account only
+    $lims_product_list = Product::where('code', $product_code[0])
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant filter
+        ->get();
+
+    if (count($lims_product_list) == 0) {
+        // 🔧 Added tenant filter to variant search as well
+        $lims_product_list = Product::join('product_variants', 'products.id', 'product_variants.product_id')
+            ->select('products.*', 'product_variants.item_code', 'product_variants.variant_id', 'product_variants.additional_price')
+            ->where('product_variants.item_code', $product_code[0])
+            ->where('products.pos_accnt_id', Auth::user()->pos_accnt_id) // tenant filter
             ->get();
-
-
-        if(count($lims_product_list) == 0) {
-            $lims_product_list = Product::join('product_variants', 'products.id', 'product_variants.product_id')
-                ->select('products.*', 'product_variants.item_code', 'product_variants.variant_id', 'product_variants.additional_price')
-                ->where('product_variants.item_code', $product_code[0])
-                ->get();
-        }
-        elseif($lims_product_list[0]->is_variant) {
-            $lims_product_list = Product::join('product_variants', 'products.id', 'product_variants.product_id')
-                ->select('products.*', 'product_variants.item_code', 'product_variants.variant_id', 'product_variants.additional_price')
-                ->where('product_variants.product_id', $lims_product_list[0]->id)
-                ->get();
-        }
-        //return $lims_product_list;
-        foreach($lims_product_list as $lims_product_data) {
-            $product = [];
-            $product[] = $lims_product_data->name;
-            if($lims_product_data->is_variant) {
-                $product[] = $lims_product_data->item_code;
-                $variant_id = $lims_product_data->variant_id;
-                $additional_price = $lims_product_data->additional_price;
-            }
-            else {
-                $product[] = $lims_product_data->code;
-                $variant_id = '';
-                $additional_price = 0;
-            }
-
-            $product[] = $lims_product_data->price + $additional_price;
-            $product[] = DNS1D::getBarcodePNG($product[1], $lims_product_data->barcode_symbology);
-            $product[] = $lims_product_data->promotion_price;
-            $product[] = config('currency');
-            $product[] = config('currency_position');
-            $product[] = $lims_product_data->qty;
-            $product[] = $lims_product_data->id;
-            $product[] = $variant_id;
-            $product[] = $lims_product_data->cost;
-            $products[] = $product;
-        }
-        return $products;
     }
+    elseif ($lims_product_list[0]->is_variant) {
+        // 🔧 Again, restrict to variants of products from this tenant
+        $lims_product_list = Product::join('product_variants', 'products.id', 'product_variants.product_id')
+            ->select('products.*', 'product_variants.item_code', 'product_variants.variant_id', 'product_variants.additional_price')
+            ->where('product_variants.product_id', $lims_product_list[0]->id)
+            ->where('products.pos_accnt_id', Auth::user()->pos_accnt_id) // tenant filter
+            ->get();
+    }
+
+    foreach ($lims_product_list as $lims_product_data) {
+        $product = [];
+        $product[] = $lims_product_data->name;
+
+        if ($lims_product_data->is_variant) {
+            $product[] = $lims_product_data->item_code;
+            $variant_id = $lims_product_data->variant_id;
+            $additional_price = $lims_product_data->additional_price;
+        } else {
+            $product[] = $lims_product_data->code;
+            $variant_id = '';
+            $additional_price = 0;
+        }
+
+        $product[] = $lims_product_data->price + $additional_price;
+        $product[] = DNS1D::getBarcodePNG($product[1], $lims_product_data->barcode_symbology);
+        $product[] = $lims_product_data->promotion_price;
+        $product[] = config('currency');
+        $product[] = config('currency_position');
+        $product[] = $lims_product_data->qty;
+        $product[] = $lims_product_data->id;
+        $product[] = $variant_id;
+        $product[] = $lims_product_data->cost;
+
+        $products[] = $product;
+    }
+
+    return $products;
+}
+
 
     /*public function getBarcode()
     {
@@ -1676,37 +1734,43 @@ $totalData = DB::table('products')->where('is_active', true)
                     return redirect()->back()->with('not_permitted', 'Unit code does not exist in the database.');
                 }
 
-                // Create or update product
+                // 🔧 Create or update product, but now scoped to the tenant (pos_accnt_id).
+                // Previously this was only matching by name + is_active, which caused conflicts 
+                // between different POS accounts. Adding pos_accnt_id ensures uniqueness 
+                // per tenant and fixes cross-tenant product duplication.
                 $product = Product::firstOrNew([
-                    'name' => $data['name'],
-                    'is_active' => true
-                ]);
+                                               'name' => $data['name'],
+                                               'pos_accnt_id' => Auth::user()->pos_accnt_id, // <-- tenant isolation added
+                                               'is_active' => true
+                                               ]);
+                // 🔧 Ensure product always carries the current tenant ID
+$product->fill([
+    'code' => $data['code'],
+    'type' => strtolower($data['type']),
+    'barcode_symbology' => 'C128',
+    'brand_id' => $brand_id,
+    'category_id' => $lims_category_data->id,
+    'unit_id' => $lims_unit_data->id,
+    'purchase_unit_id' => $lims_unit_data->id,
+    'sale_unit_id' => $lims_unit_data->id,
+    'cost' => $data['cost'],
+    'price' => $data['price'],
+    'tax_method' => 1,
+    'qty' => 0,
+    'product_details' => $data['productdetails'] ?? '',
+    'is_active' => true,
+    'image' => $data['image'] ?? 'zummXD2dvAtI.png',
+    'pos_accnt_id' => Auth::user()->pos_accnt_id // <-- make sure it is always set
+]);
 
-                $product->fill([
-                    'code' => $data['code'],
-                    'type' => strtolower($data['type']),
-                    'barcode_symbology' => 'C128',
-                    'brand_id' => $brand_id,
-                    'category_id' => $lims_category_data->id,
-                    'unit_id' => $lims_unit_data->id,
-                    'purchase_unit_id' => $lims_unit_data->id,
-                    'sale_unit_id' => $lims_unit_data->id,
-                    'cost' => $data['cost'],
-                    'price' => $data['price'],
-                    'tax_method' => 1,
-                    'qty' => 0,
-                    'product_details' => $data['productdetails'] ?? '',
-                    'is_active' => true,
-                    'image' => $data['image'] ?? 'zummXD2dvAtI.png',
-                ]);
+// 🔧 Ecommerce slug handling remains the same, just scoped per tenant naturally
+if (in_array('ecommerce', explode(',', config('addons')))) {
+    $data['slug'] = Str::slug($data['name'], '-');
+    $product->slug = preg_replace('/[^A-Za-z0-9\-]/', '', $data['slug']);
+    $product->in_stock = true;
+}
 
-                if (in_array('ecommerce', explode(',', config('addons')))) {
-                    $data['slug'] = Str::slug($data['name'], '-');
-                    $product->slug = preg_replace('/[^A-Za-z0-9\-]/', '', $data['slug']);
-                    $product->in_stock = true;
-                }
-
-                $product->save();
+$product->save();
 
                 // Handle variants
                 $warehouse_ids = Warehouse::where('is_active', true)->pluck('id');
@@ -1789,62 +1853,96 @@ $totalData = DB::table('products')->where('is_active', true)
 
 
     public function allProductInStock()
-    {
-        if(!in_array('ecommerce',explode(',', config('addons'))))
-            return redirect()->back()->with('not_permitted', 'Please install the ecommerce addon!');
-        Product::where('is_active', true)->update(['in_stock' => true]);
-        return redirect()->back()->with('create_message', 'All Products set to in stock successfully!');
-    }
+{
+    if(!in_array('ecommerce', explode(',', config('addons'))))
+        return redirect()->back()->with('not_permitted', 'Please install the ecommerce addon!');
+
+    // 🔧 Added tenant filter so only current POS account's products are updated
+    Product::where('is_active', true)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+        ->update(['in_stock' => true]);
+
+    return redirect()->back()->with('create_message', 'All Products set to in stock successfully!');
+}
+
 
     public function showAllProductOnline()
-    {
-        if(!in_array('ecommerce',explode(',', config('addons'))))
-            return redirect()->back()->with('not_permitted', 'Please install the ecommerce addon!');
-        Product::where('is_active', true)->update(['is_online' => true]);
-        return redirect()->back()->with('create_message', 'All Products will be showed to online!');
-    }
+{
+    if(!in_array('ecommerce', explode(',', config('addons'))))
+        return redirect()->back()->with('not_permitted', 'Please install the ecommerce addon!');
+
+    // 🔧 Added tenant filter so it only affects the logged-in POS account’s products
+    Product::where('is_active', true)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+        ->update(['is_online' => true]);
+
+    return redirect()->back()->with('create_message', 'All Products will be showed online!');
+}
+
 
     public function deleteBySelection(Request $request)
-    {
-        $product_id = $request['productIdArray'];
-        foreach ($product_id as $id) {
-            $lims_product_data = Product::findOrFail($id);
-            $lims_product_data->is_active = false;
-            $lims_product_data->save();
+{
+    $product_id = $request['productIdArray'];
+    foreach ($product_id as $id) {
+        // 🔧 Added tenant filter to prevent cross-tenant deletion.
+        // Before: Product::findOrFail($id) — risk of deleting products from another POS.
+        $lims_product_data = Product::where('id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant isolation
+            ->firstOrFail();
 
-            if($lims_product_data->image) {
-                $images = explode(",", $lims_product_data->image);
-                foreach ($images as $image) {
-                    $this->fileDelete(public_path('images/product/'), $image);
-                }
+        $lims_product_data->is_active = false;
+        $lims_product_data->save();
+
+        // 🔧 Safe image cleanup for this tenant's products
+        if ($lims_product_data->image) {
+            $images = explode(",", $lims_product_data->image);
+            foreach ($images as $image) {
+                $this->fileDelete(public_path('images/product/'), $image);
             }
         }
-        $this->cacheForget('product_list');
-        $this->cacheForget('product_list_with_variant');
-        return 'Product deleted successfully!';
     }
+
+    // 🔧 Still clearing cache after multi-delete, no tenant issue here
+    $this->cacheForget('product_list');
+    $this->cacheForget('product_list_with_variant');
+
+    return 'Product deleted successfully!';
+}
+
 
     public function destroy($id)
-    {
-        if(!env('USER_VERIFIED')) {
-            return redirect()->back()->with('not_permitted', 'This feature is disable for demo!');
-        }
-        else {
-            $lims_product_data = Product::findOrFail($id);
-            $lims_product_data->is_active = false;
-            if($lims_product_data->image != 'zummXD2dvAtI.png') {
-                $images = explode(",", $lims_product_data->image);
-                foreach ($images as $key => $image) {
-                    $this->fileDelete(public_path('images/product/'), $image);
-                    $this->fileDelete(public_path('images/product/large/'), $image);
-                    $this->fileDelete(public_path('images/product/medium/'), $image);
-                    $this->fileDelete(public_path('images/product/small/'), $image);
-                }
-            }
-            $lims_product_data->save();
-            $this->cacheForget('product_list');
-            $this->cacheForget('product_list_with_variant');
-            return redirect('products')->with('message', 'Product deleted successfully');
-        }
+{
+    if(!env('USER_VERIFIED')) {
+        return redirect()->back()->with('not_permitted', 'This feature is disable for demo!');
     }
+    else {
+        // 🔧 Added tenant filter so users can only delete their own products.
+        // Before: Product::findOrFail($id) → allowed deleting any product by ID.
+        $lims_product_data = Product::where('id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // tenant isolation
+            ->firstOrFail();
+
+        $lims_product_data->is_active = false;
+
+        // 🔧 Only delete images if they’re not the placeholder.
+        if($lims_product_data->image != 'zummXD2dvAtI.png') {
+            $images = explode(",", $lims_product_data->image);
+            foreach ($images as $key => $image) {
+                $this->fileDelete(public_path('images/product/'), $image);
+                $this->fileDelete(public_path('images/product/large/'), $image);
+                $this->fileDelete(public_path('images/product/medium/'), $image);
+                $this->fileDelete(public_path('images/product/small/'), $image);
+            }
+        }
+
+        $lims_product_data->save();
+
+        // 🔧 Clear product caches after deletion
+        $this->cacheForget('product_list');
+        $this->cacheForget('product_list_with_variant');
+
+        return redirect('products')->with('message', 'Product deleted successfully');
+    }
+}
+
 }
