@@ -1,6 +1,5 @@
 /node_modules
 /public/hot
-/public/salepro*
 /storage/*.key
 /vendor
 .env
