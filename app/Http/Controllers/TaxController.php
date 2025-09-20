@@ -17,18 +17,28 @@ class TaxController extends Controller
      * @return \Illuminate\Http\Response
      */
     public function index()
-    {
-        $role = Role::find(Auth::user()->role_id);
-        if($role->hasPermissionTo('tax')) {
-            // Filter tax records by the admin's pos_accnt_id
-            $lims_tax_all = Tax::where('is_active', true)
-                             ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
-                             ->get();
-            return view('backend.tax.create', compact('lims_tax_all'));
-        }
-        else
-            return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+{
+    $role = Role::find(Auth::user()->role_id);
+
+    // Permission check: should be "tax-index" to stay consistent 
+    // with route naming and other controllers (unit-index, brand-index, etc.)
+    if($role->hasPermissionTo('tax-index')) {
+
+        // Scoped by pos_accnt_id so each account only sees their own tax records
+        $posAccntId = Auth::user()->pos_accnt_id;
+
+        $lims_tax_all = Tax::where('is_active', true)
+                           ->where('pos_accnt_id', $posAccntId)
+                           ->get();
+
+        // Fixed the view: this is the listing method, so it should return the index view
+        return view('backend.tax.index', compact('lims_tax_all'));
     }
+    else {
+        return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+    }
+}
+
 
     /**
      * Store a newly created resource in storage.
@@ -37,42 +47,45 @@ class TaxController extends Controller
      * @return \Illuminate\Http\Response
      */
     public function store(Request $request)
-    {
-        $this->validate($request, [
-            'name' => [
-                'max:255',
-                Rule::unique('taxes')->where(function ($query) {
-                    return $query->where('is_active', 1)
-                               ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
-                }),
-            ],
-            'rate' => 'numeric|min:0|max:100',
-            'TAX_SHORT_DESC' => 'required|max:255',
-        ]);
-        
-        // Get all the form inputs
-        $input = $request->all();
-        $input['is_active'] = true;
-        // Set the pos_accnt_id to the logged-in admin's pos_accnt_id
-        $input['pos_accnt_id'] = Auth::user()->pos_accnt_id;
-        
-        // Create the new tax record in the database
-        $tax = Tax::create($input);
-        
-        // Create corresponding account record
-        $this->createCorrespondingAccount($tax);
-        
-        // Clear the cached tax list if necessary
-        $this->cacheForget('tax_list');
-        
-        // If the form is submitted via AJAX, return the tax data
-        if (isset($input['ajax'])) {
-            return $tax;
-        } else {
-            // Redirect back with a success message
-            return redirect('tax')->with('message', 'Data inserted successfully');
-        }
+{
+    // Validation:
+    // - Added pos_accnt_id in the unique check to enforce uniqueness per account.
+    // - Ensured rate is between 0–100.
+    // - TAX_SHORT_DESC is required.
+    $this->validate($request, [
+        'name' => [
+            'max:255',
+            Rule::unique('taxes')->where(function ($query) {
+                return $query->where('is_active', 1)
+                             ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+            }),
+        ],
+        'rate' => 'numeric|min:0|max:100',
+        'TAX_SHORT_DESC' => 'required|max:255',
+    ]);
+
+    // Gather the form inputs
+    $input = $request->all();
+    $input['is_active'] = true;
+    $input['pos_accnt_id'] = Auth::user()->pos_accnt_id; // attach ownership
+
+    // Create the tax record
+    $tax = Tax::create($input);
+
+    // Business logic: also create a corresponding account entry
+    $this->createCorrespondingAccount($tax);
+
+    // Clear cache so new tax shows up everywhere
+    $this->cacheForget('tax_list');
+
+    // Handle AJAX vs. normal request
+    if (isset($input['ajax'])) {
+        return $tax;
+    } else {
+        return redirect('tax')->with('message', 'Tax created successfully');
     }
+}
+
 
     /**
      * Create a corresponding account record for the tax
@@ -121,15 +134,28 @@ class TaxController extends Controller
      *
      * @return \Illuminate\Http\Response
      */
-    public function limsTaxSearch()
-    {
-        $lims_tax_name = $_GET['lims_taxNameSearch'];
-        $lims_tax_all = Tax::where('name', $lims_tax_name)
-                          ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
-                          ->paginate(5);
-        $lims_tax_list = Tax::where('pos_accnt_id', Auth::user()->pos_accnt_id)->get();
-        return view('backend.tax.create', compact('lims_tax_all','lims_tax_list'));
-    }
+    public function limsTaxSearch(Request $request)
+{
+    // Use Request instead of raw $_GET — cleaner and more testable
+    $query = $request->input('lims_taxNameSearch');
+
+    $posAccntId = Auth::user()->pos_accnt_id;
+
+    // Search by partial match instead of exact name, so it's more user-friendly
+    $lims_tax_all = Tax::where('name', 'LIKE', "%{$query}%")
+                       ->where('is_active', true) // only show active taxes
+                       ->where('pos_accnt_id', $posAccntId)
+                       ->paginate(5);
+
+    // Get full list for dropdowns or other UI use, but filter by active + account
+    $lims_tax_list = Tax::where('pos_accnt_id', $posAccntId)
+                        ->where('is_active', true)
+                        ->get();
+
+    // Fixed the view: search results belong in index, not create
+    return view('backend.tax.index', compact('lims_tax_all', 'lims_tax_list'));
+}
+
 
     /**
      * Show the form for editing the specified resource.
@@ -153,34 +179,45 @@ class TaxController extends Controller
      * @return \Illuminate\Http\Response
      */
     public function update(Request $request, $id)
-    {
-        $this->validate($request, [
-            'name' => [
-                'max:255',
-                Rule::unique('taxes')->ignore($request->tax_id)->where(function ($query) {
-                    return $query->where('is_active', 1)
-                               ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
-                }),
-            ],
-            'rate' => 'numeric|min:0|max:100'
-        ]);
-        
-        $input = $request->all();
-        $lims_tax_data = Tax::where('id', $input['tax_id'])
-                          ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
-                          ->firstOrFail();
-        
-        // Store old name to find the corresponding account
-        $oldName = $lims_tax_data->name;
-        
-        $lims_tax_data->update($input);
-        
-        // Update corresponding account
-        $this->updateCorrespondingAccount($oldName, $lims_tax_data);
-        
-        $this->cacheForget('tax_list');
-        return redirect('tax')->with('message', 'Data updated successfully');
-    }
+{
+    // Validation:
+    // - Use $id directly in ignore() instead of $request->tax_id, 
+    //   since $id comes from the route and is the reliable identifier.
+    // - Still scoping uniqueness by pos_accnt_id so names are unique per account.
+    $this->validate($request, [
+        'name' => [
+            'max:255',
+            Rule::unique('taxes')->ignore($id)->where(function ($query) {
+                return $query->where('is_active', 1)
+                             ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+            }),
+        ],
+        'rate' => 'numeric|min:0|max:100'
+    ]);
+
+    $input = $request->all();
+
+    // Ownership check: make sure the tax belongs to this account
+    $posAccntId = Auth::user()->pos_accnt_id;
+    $lims_tax_data = Tax::where('id', $id)
+                        ->where('pos_accnt_id', $posAccntId)
+                        ->firstOrFail();
+
+    // Store old name before update (needed for updating corresponding account)
+    $oldName = $lims_tax_data->name;
+
+    // Perform the update
+    $lims_tax_data->update($input);
+
+    // Update the related account record to stay in sync
+    $this->updateCorrespondingAccount($oldName, $lims_tax_data);
+
+    // Clear cache so changes reflect everywhere
+    $this->cacheForget('tax_list');
+
+    return redirect('tax')->with('message', 'Tax updated successfully');
+}
+
     
     /**
      * Update the corresponding account record for the tax
@@ -274,17 +311,25 @@ class TaxController extends Controller
      * @return \Illuminate\Http\Response
      */
     public function destroy($id)
-    {
-        $lims_tax_data = Tax::where('id', $id)
-                          ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
-                          ->firstOrFail();
-        
-        // Deactivate corresponding account
-        $this->deactivateCorrespondingAccount($lims_tax_data->name);
-        
-        $lims_tax_data->is_active = false;
-        $lims_tax_data->save();
-        $this->cacheForget('tax_list');
-        return redirect('tax')->with('message', 'Data deleted successfully');
-    }
+{
+    // Ownership check: only allow deletion of tax records 
+    // that belong to the logged-in account
+    $posAccntId = Auth::user()->pos_accnt_id;
+    $lims_tax_data = Tax::where('id', $id)
+                        ->where('pos_accnt_id', $posAccntId)
+                        ->firstOrFail();
+
+    // Also deactivate the corresponding account so bookkeeping stays in sync
+    $this->deactivateCorrespondingAccount($lims_tax_data->name);
+
+    // Soft-delete: mark as inactive instead of removing from DB
+    $lims_tax_data->is_active = false;
+    $lims_tax_data->save();
+
+    // Clear cache so the deleted tax doesn’t show in lists
+    $this->cacheForget('tax_list');
+
+    return redirect('tax')->with('message', 'Tax deleted successfully');
+}
+
 }
