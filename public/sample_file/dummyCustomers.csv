@@ -1,0 +1,6 @@
+Customer Group,Name,University,Email,Phone Number,Phone Number 2,Campus,Year of Study,Programme,Nationality,Student ID,National ID,Country,Sub County,Ward,Sublocation,Village,Member Number,Next of Kin - Name,Next of Kin - Mobile,Next of Kin - Relationship,INPL
+Regular,Test 1,XYZ University,brianmimi69@gmail.com,712345678,712345679,Main Campus,2025,Computer Science,Kenyan,12345,67890,Kenya,Nairobi,Westlands,Parklands,Lavington,,Jane Doe,723456789,Mother,-500
+Regular,Test 2,XYZ University,johndoe@example.com,712345678,712345679,Main Campus,2025,Computer Science,Kenyan,12345,67890,Kenya,Nairobi,Westlands,Parklands,Lavington,,Jane Doe,723456789,Mother,0
+Regular,Test 3,XYZ University,johndoe@example.com,712345678,712345679,Main Campus,2025,Computer Science,Kenyan,12345,67890,Kenya,Nairobi,Westlands,Parklands,Lavington,,Jane Doe,723456789,Mother,-500
+Regular,Test 4,XYZ University,johndoe@example.com,712345678,712345679,Main Campus,2025,Computer Science,Kenyan,12345,67890,Kenya,Nairobi,Westlands,Parklands,Lavington,,Jane Doe,723456789,Mother,0
+Regular,Test 5,XYZ University,johndoe@example.com,712345678,712345679,Main Campus,2025,Computer Science,Kenyan,12345,67890,Kenya,Nairobi,Westlands,Parklands,Lavington,,Jane Doe,723456789,Mother,-500
