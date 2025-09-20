@@ -381,9 +381,13 @@ $totalData = DB::table('products')->where('is_active', true)
             ],
             'name' => [
                 'max:255',
-                    Rule::unique('products')->where(function ($query) {
-                    return $query->where('is_active', 1);
-                }),
+                        // NOTE (Dev): Added pos_accnt_id in the unique validation so that products 
+                        // with the same code or name can exist in different POS accounts but 
+                        // remain unique inside a single POS account.
+                        Rule::unique('products')->where(function ($query) {
+                            return $query->where('is_active', 1)
+                                ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+                        }),
             ]
         ]);
         $data = $request->except('image', 'file');
@@ -1143,9 +1147,11 @@ $totalData = DB::table('products')->where('is_active', true)
 
                 'code' => [
                     'max:255',
-                    Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
-                        return $query->where('is_active', 1);
-                    }),
+                    // NOTE (Dev): Same logic as store(), restrict uniqueness check to current POS.
+                            Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
+                                return $query->where('is_active', 1)
+                                    ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+                            }),
                 ]
             ]);
 
@@ -1393,7 +1399,10 @@ $totalData = DB::table('products')->where('is_active', true)
     public function search(Request $request)
     {
         $product_code = explode(" (", $request['data']);
-        $lims_product_data = Product::where('code', $product_code[0])->first();
+        // NOTE (Dev): Limited product search to the logged-in admin's POS only.
+        $lims_product_data = Product::where('code', $product_code[0])
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->first();
 
         $product[] = $lims_product_data->name;
         $product[] = $lims_product_data->code;
@@ -1421,7 +1430,12 @@ $totalData = DB::table('products')->where('is_active', true)
             $data->code = $data->item_code;
         }
         else
-            $data = Product::select('name', 'code')->find($id);
+            // NOTE (Dev): Restricted product data fetch to the current POS account.
+            $data = Product::select('name', 'code')
+                ->where('id', $id)
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+                ->first();
+
         return $data;
     }
 
@@ -1500,8 +1514,14 @@ $totalData = DB::table('products')->where('is_active', true)
 
     public function productWithoutVariant()
     {
-        return Product::ActiveStandard()->select('id', 'name', 'code')
-                ->whereNull('is_variant')->get();
+        // NOTE (Dev): Added pos_accnt_id filter so that only products 
+        // belonging to the logged-in admin's POS show up.
+        return Product::ActiveStandard()
+            ->select('id', 'name', 'code')
+            ->whereNull('is_variant')
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+
     }
 
     public function productWithVariant()
@@ -1517,10 +1537,11 @@ $totalData = DB::table('products')->where('is_active', true)
     {
         $product_code = explode("(", $request['data']);
         $product_code[0] = rtrim($product_code[0], " ");
-        $lims_product_list = Product::where([
-            ['code', $product_code[0] ],
-            ['is_active', true]
-        ])->get();
+        // NOTE (Dev): Restricted search to current POS account only.
+        $lims_product_list = Product::where('code', $product_code[0])
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+
 
         if(count($lims_product_list) == 0) {
             $lims_product_list = Product::join('product_variants', 'products.id', 'product_variants.product_id')
