@@ -331,8 +331,10 @@ protected function sendStatusChangeEmail($customer)
         'phone_number' => [
             'required',
             'max:255',
+            // ❌ MISSING pos_accnt_id filter - allows duplicates across accounts
             Rule::unique('customers')->where(function ($query) {
-                return $query->where('is_active', 1);
+                return $query->where('is_active', 1)
+                    ->where('pos_accnt_id', Auth::user()->pos_accnt_id); // ✅ ADD THIS
             }),
         ],
         'email' => [
@@ -341,6 +343,7 @@ protected function sendStatusChangeEmail($customer)
             'max:255',
             Rule::unique('customers')->where(function ($query) {
                 return $query->where('is_active', 1);
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id); // ✅ ADD THIS
             }),
         ],
         'location' => 'nullable|string|max:255',
@@ -574,82 +577,112 @@ private function formatPhoneNumber($phone)
     
 
     public function edit($id)
-    {
-        $role = Role::find(Auth::user()->role_id);
-        if($role->hasPermissionTo('customers-edit')){
-            $lims_customer_data = Customer::find($id);
-            $lims_customer_group_all = CustomerGroup::where('is_active',true)->get();
-            $custom_fields = CustomField::where('belongs_to', 'customer')->get();
-            return view('backend.customer.edit', compact('lims_customer_data','lims_customer_group_all', 'custom_fields'));
+{
+    $role = Role::find(Auth::user()->role_id);
+    if($role->hasPermissionTo('customers-edit')){
+        // ✅ Ensure customer belongs to current POS account
+        $lims_customer_data = Customer::where('id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->first();
+        
+        // ✅ If no customer found with matching pos_accnt_id, redirect with error
+        if(!$lims_customer_data) {
+            return redirect()->back()->with('not_permitted', 'Sorry! You do not have access to this customer');
         }
-        else
-            return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+        
+        // ✅ Filter customer groups by pos_accnt_id
+        $lims_customer_group_all = CustomerGroup::where('is_active', true)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+        
+        // ✅ Filter custom fields by pos_accnt_id
+        $custom_fields = CustomField::where('belongs_to', 'customer')
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+        
+        return view('backend.customer.edit', compact('lims_customer_data','lims_customer_group_all', 'custom_fields'));
     }
+    else
+        return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+}
 
     public function update(Request $request, $id)
-    {
+{
+    // ✅ First ensure customer belongs to current POS account
+    $lims_customer_data = Customer::where('id', $id)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+        ->firstOrFail();
+
+    // ✅ Add pos_accnt_id filter to phone number validation
+    $this->validate($request, [
+        'phone_number' => [
+            'max:255',
+            Rule::unique('customers')->ignore($id)->where(function ($query) {
+                return $query->where('is_active', 1)
+                    ->where('pos_accnt_id', Auth::user()->pos_accnt_id); // ✅ Added tenant filter
+            }),
+        ],
+    ]);
+
+    $input = $request->all();
+
+    if(isset($input['user'])) {
         $this->validate($request, [
-            'phone_number' => [
+            'name' => [
                 'max:255',
-                    Rule::unique('customers')->ignore($id)->where(function ($query) {
-                    return $query->where('is_active', 1);
+                Rule::unique('users')->where(function ($query) {
+                    return $query->where('is_deleted', false);
+                }),
+            ],
+            'email' => [
+                'email',
+                'max:255',
+                Rule::unique('users')->where(function ($query) {
+                    return $query->where('is_deleted', false);
                 }),
             ],
         ]);
 
-        $input = $request->all();
-        $lims_customer_data = Customer::find($id);
-
-        if(isset($input['user'])) {
-            $this->validate($request, [
-                'name' => [
-                    'max:255',
-                        Rule::unique('users')->where(function ($query) {
-                        return $query->where('is_deleted', false);
-                    }),
-                ],
-                'email' => [
-                    'email',
-                    'max:255',
-                        Rule::unique('users')->where(function ($query) {
-                        return $query->where('is_deleted', false);
-                    }),
-                ],
-            ]);
-
-            $input['phone'] = $input['phone_number'];
-            $input['role_id'] = 5;
-            $input['is_active'] = true;
-            $input['is_deleted'] = false;
-            $input['password'] = bcrypt($input['password']);
-            $user = User::create($input);
-            $input['user_id'] = $user->id;
-            $message = 'Customer updated and user created successfully';
-        }
-        else {
-            $message = 'Customer updated successfully';
-        }
-
-        $input['name'] = $input['customer_name'];
-        $lims_customer_data->update($input);
-        //update custom field data
-        $custom_field_data = [];
-        $custom_fields = CustomField::where('belongs_to', 'customer')->select('name', 'type')->get();
-        foreach ($custom_fields as $type => $custom_field) {
-            $field_name = str_replace(' ', '_', strtolower($custom_field->name));
-            if(isset($input[$field_name])) {
-                if($custom_field->type == 'checkbox' || $custom_field->type == 'multi_select')
-                    $custom_field_data[$field_name] = implode(",", $input[$field_name]);
-                else
-                    $custom_field_data[$field_name] = $input[$field_name];
-            }
-        }
-        if(count($custom_field_data))
-            DB::table('customers')->where('id', $lims_customer_data->id)->update($custom_field_data);
-        $this->cacheForget('customer_list');
-
-        return redirect('customer')->with('edit_message', $message);
+        $input['phone'] = $input['phone_number'];
+        $input['role_id'] = 5;
+        $input['is_active'] = true;
+        $input['is_deleted'] = false;
+        $input['password'] = bcrypt($input['password']);
+        $user = User::create($input);
+        $input['user_id'] = $user->id;
+        $message = 'Customer updated and user created successfully';
     }
+    else {
+        $message = 'Customer updated successfully';
+    }
+
+    $input['name'] = $input['customer_name'];
+    $lims_customer_data->update($input);
+    
+    // ✅ Filter custom fields by pos_accnt_id
+    $custom_field_data = [];
+    $custom_fields = CustomField::where('belongs_to', 'customer')
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // ✅ Added tenant filter
+        ->select('name', 'type')
+        ->get();
+    
+    foreach ($custom_fields as $type => $custom_field) {
+        $field_name = str_replace(' ', '_', strtolower($custom_field->name));
+        if(isset($input[$field_name])) {
+            if($custom_field->type == 'checkbox' || $custom_field->type == 'multi_select')
+                $custom_field_data[$field_name] = implode(",", $input[$field_name]);
+            else
+                $custom_field_data[$field_name] = $input[$field_name];
+        }
+    }
+    
+    if(count($custom_field_data))
+        DB::table('customers')->where('id', $lims_customer_data->id)->update($custom_field_data);
+    
+    $this->cacheForget('customer_list');
+
+    return redirect('customer')->with('edit_message', $message);
+}
 
 public function importCustomer(Request $request)
 {
