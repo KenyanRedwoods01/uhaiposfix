@@ -313,16 +313,24 @@ protected function sendStatusChangeEmail($customer)
     }
 
     public function create()
-    {
-        $role = Role::find(Auth::user()->role_id);
-        if($role->hasPermissionTo('customers-add')){
-            $lims_customer_group_all = CustomerGroup::where('is_active',true)->get();
-            $custom_fields = CustomField::where('belongs_to', 'customer')->get();
-            return view('backend.customer.create', compact('lims_customer_group_all', 'custom_fields'));
-        }
-        else
-            return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+{
+    $role = Role::find(Auth::user()->role_id);
+    if($role->hasPermissionTo('customers-add')){
+        // ✅ Filter customer groups by pos_accnt_id
+        $lims_customer_group_all = CustomerGroup::where('is_active', true)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+        
+        // ✅ Filter custom fields by pos_accnt_id
+        $custom_fields = CustomField::where('belongs_to', 'customer')
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id)
+            ->get();
+        
+        return view('backend.customer.create', compact('lims_customer_group_all', 'custom_fields'));
     }
+    else
+        return redirect()->back()->with('not_permitted', 'Sorry! You are not allowed to access this module');
+}
 
 
     public function store(Request $request)
@@ -798,7 +806,13 @@ public function importCustomer(Request $request)
             }
 
             // Create or update customer
-            $customer = Customer::firstOrNew(['name' => $data['name'], 'country' => $data['country'], 'is_active' => true]);
+            $customer = Customer::firstOrNew([
+            'name' => $data['name'], 
+            'country' => $data['country'], 
+            'pos_accnt_id' => Auth::user()->pos_accnt_id, // ✅ ADD THIS
+            'is_active' => true
+            ]);
+        
             $customer->fill([
                 'customer_group_id' => $customer_group->id,
                 'company_name' => $data['company_name'] ?? null,
@@ -821,6 +835,7 @@ public function importCustomer(Request $request)
                 'next_of_kin_relationship' => $data['next_of_kin_relationship'] ?? null,
                 'INPL' => $data['INPL'] ?? null,
                                 'assigned' => $data['INPL'] ?? null,
+                'pos_accnt_id' => Auth::user()->pos_accnt_id, // ✅ ENSURES THIS IS SET
 
                 'is_active' => true,
 
@@ -927,25 +942,35 @@ public function importCustomer(Request $request)
     }
 
     public function deleteBySelection(Request $request)
-    {
-        $customer_id = $request['customerIdArray'];
-        foreach ($customer_id as $id) {
-            $lims_customer_data = Customer::find($id);
-            $lims_customer_data->is_active = false;
-            $lims_customer_data->save();
-        }
-        $this->cacheForget('customer_list');
-        return 'Customer deleted successfully!';
-    }
-
-    public function destroy($id)
-    {
-        $lims_customer_data = Customer::find($id);
+{
+    $customer_id = $request['customerIdArray'];
+    foreach ($customer_id as $id) {
+        // ❌ MISSING tenant filter
+        $lims_customer_data = Customer::where('id', $id)
+            ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // ✅ ADD THIS
+            ->firstOrFail();
+        
         $lims_customer_data->is_active = false;
         $lims_customer_data->save();
-        $this->cacheForget('customer_list');
-        return redirect('customer')->with('not_permitted','Data deleted Successfully');
     }
+    $this->cacheForget('customer_list');
+    return 'Customer deleted successfully!';
+}
+
+
+    public function destroy($id)
+{
+    // ❌ MISSING tenant filter
+    $lims_customer_data = Customer::where('id', $id)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // ✅ ADD THIS
+        ->firstOrFail();
+    
+    $lims_customer_data->is_active = false;
+    $lims_customer_data->save();
+    $this->cacheForget('customer_list');
+    return redirect('customer')->with('not_permitted','Data deleted Successfully');
+}
+
 
     protected function mailAction($data, $mailSetting, $request, $customMessage=null)
     {
@@ -968,15 +993,19 @@ public function importCustomer(Request $request)
     }
 
     public function customersAll()
-    {
-        $lims_customer_list = DB::table('customers')->where('is_active', true)->get();
+{
+    // ❌ RETURNS ALL CUSTOMERS FROM ALL ACCOUNTS!
+    $lims_customer_list = DB::table('customers')
+        ->where('is_active', true)
+        ->where('pos_accnt_id', Auth::user()->pos_accnt_id) // ✅ ADD THIS
+        ->get();
 
-        $html = '';
-        foreach($lims_customer_list as $customer){
-            $html .='<option value="'.$customer->id.'">'.$customer->name . ' (' . $customer->phone_number. ')'.'</option>';
-        }
-
-        return response()->json($html);
+    $html = '';
+    foreach($lims_customer_list as $customer){
+        $html .='<option value="'.$customer->id.'">'.$customer->name . ' (' . $customer->phone_number. ')'.'</option>';
     }
+
+    return response()->json($html);
+}
 
 }
