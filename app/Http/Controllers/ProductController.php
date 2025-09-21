@@ -1138,22 +1138,26 @@ $totalData = DB::table('products')->where('is_active', true)
         }
         else {
             $this->validate($request, [
-                'name' => [
-                    'max:255',
-                    Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
-                        return $query->where('is_active', 1);
-                    }),
-                ],
+    'name' => [
+        'max:255',
+        // NOTE (Dev): Added pos_accnt_id in the unique validation so that products 
+        // with the same name can exist in different POS accounts but 
+        // remain unique inside a single POS account.
+        Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
+            return $query->where('is_active', 1)
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+        }),
+    ],
 
-                'code' => [
-                    'max:255',
-                    // NOTE (Dev): Same logic as store(), restrict uniqueness check to current POS.
-                            Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
-                                return $query->where('is_active', 1)
-                                    ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
-                            }),
-                ]
-            ]);
+    'code' => [
+        'max:255',
+        // NOTE (Dev): Same logic as store(), restrict uniqueness check to current POS.
+        Rule::unique('products')->ignore($request->input('id'))->where(function ($query) {
+            return $query->where('is_active', 1)
+                ->where('pos_accnt_id', Auth::user()->pos_accnt_id);
+        }),
+    ]
+]);
 
             $lims_product_data = Product::findOrFail($request->input('id'));
             $data = $request->except('image', 'file', 'prev_img');
