@@ -63,6 +63,22 @@ use App\Http\Controllers\LabelsController;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
+// Lightweight endpoints for SPA auth
+Route::get('/csrf-token', function() {
+    return response()->json(['csrfToken' => csrf_token()]);
+});
+
+Route::middleware('auth')->get('/me', function() {
+    $user = Auth::user();
+    return response()->json([
+        'id' => $user->id,
+        'name' => $user->name,
+        'email' => $user->email,
+        'role_id' => $user->role_id,
+        'roles' => method_exists($user, 'getRoleNames') ? $user->getRoleNames() : [],
+        'permissions' => method_exists($user, 'getDirectPermissions') ? $user->getAllPermissions()->pluck('name') : [],
+    ]);
+});
 
 use App\Http\Controllers\PosIncomeController;
 use App\Http\Controllers\PosIncomeCategoryController;

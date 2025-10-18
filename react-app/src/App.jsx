@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import { RequireAuth, useAuth } from './auth.jsx'
 import './App.css'
 
 function Landing() {
@@ -76,7 +77,104 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route
+          path="/dashboard"
+          element={(
+            <RequireAuth>
+              <Dashboard />
+            </RequireAuth>
+          )}
+        />
       </Routes>
     </BrowserRouter>
+  )
+}
+
+function StatCard({ title, value, color }) {
+  return (
+    <div className="stat-card" style={{ borderColor: color }}>
+      <div className="stat-card__title">{title}</div>
+      <div className="stat-card__value">{value}</div>
+    </div>
+  )
+}
+
+function Dashboard() {
+  const { user } = useAuth()
+  const [tiles, setTiles] = React.useState(null)
+
+  React.useEffect(() => {
+    // Use existing endpoints for dashboard widgets
+    Promise.all([
+      fetch('/recent-sale', { credentials: 'include' }).then((r) => r.json()),
+      fetch('/recent-purchase', { credentials: 'include' }).then((r) => r.json()),
+      fetch('/recent-quotation', { credentials: 'include' }).then((r) => r.json()),
+      fetch('/recent-payment', { credentials: 'include' }).then((r) => r.json()),
+    ]).then(([sales, purchases, quotes, payments]) => {
+      setTiles({ sales, purchases, quotes, payments })
+    })
+  }, [])
+
+  return (
+    <div className="dashboard">
+      <DashNav />
+      <div className="dashboard__grid">
+        <StatCard title="Sales" value={tiles?.sales?.length ?? 0} color="#733686" />
+        <StatCard title="Purchases" value={tiles?.purchases?.length ?? 0} color="#ff8952" />
+        <StatCard title="Quotations" value={tiles?.quotes?.length ?? 0} color="#00c689" />
+        <StatCard title="Payments" value={tiles?.payments?.length ?? 0} color="#297ff9" />
+      </div>
+      <div className="dashboard__panels">
+        <RoundedPanel title="Recent Sales">
+          <List items={tiles?.sales} fields={["created_at","reference_no","name","grand_total"]} />
+        </RoundedPanel>
+        <RoundedPanel title="Recent Purchases">
+          <List items={tiles?.purchases} fields={["created_at","reference_no","name","grand_total"]} />
+        </RoundedPanel>
+      </div>
+    </div>
+  )
+}
+
+function List({ items, fields }) {
+  if (!items) return null
+  return (
+    <div className="list">
+      {items.map((it, idx) => (
+        <div key={idx} className="list__row">
+          {fields.map((f) => (
+            <div key={f} className="list__cell">{String(it[f] ?? '')}</div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RoundedPanel({ title, children }) {
+  return (
+    <div className="panel">
+      <div className="panel__header">{title}</div>
+      <div className="panel__body">{children}</div>
+    </div>
+  )
+}
+
+function DashNav() {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div className="dashnav">
+      <button aria-label="Open menu" className="icon-btn" onClick={() => setOpen(!open)}>
+        <i className="fas fa-bars" />
+      </button>
+      <div className="dashnav__brand">Dashboard</div>
+      {open && (
+        <div className="sidebar">
+          <Link to="/dashboard">Overview</Link>
+          <a href="/sales">Sales</a>
+          <a href="/purchases">Purchases</a>
+        </div>
+      )}
+    </div>
   )
 }
